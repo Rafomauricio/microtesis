@@ -1,0 +1,154 @@
+services:
+  postgres:
+    image: 'postgres:15'
+    container_name: tiktoc-db
+    environment:
+      POSTGRES_USER: tiktoc
+      POSTGRES_PASSWORD: TikToc-2024
+      POSTGRES_DB: tiktocdb
+    networks:
+      - tiktoc_new_net
+    volumes:
+      - 'postgres_data:/var/lib/postgresql/data'
+    labels:
+      - prometheus_job=postgres
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'pg_isready -U tiktoc'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  postgres-exporter:
+    image: 'bitnami/postgres-exporter:latest'
+    container_name: tiktoc-postgres-exporter
+    environment:
+        DATA_SOURCE_NAME: 'postgresql://tiktoc:TikToc-2024@tiktoc-db:5432'
+    ports:
+      - '9187:9187'
+    depends_on:
+      - postgres
+    networks:
+      - tiktoc_new_net
+  elasticsearch:
+    image: 'docker.elastic.co/elasticsearch/elasticsearch:8.10.2'
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - 'ES_JAVA_OPTS=-Xms1g -Xmx1g'
+    networks:
+      - tiktoc_new_net
+    volumes:
+      - 'elasticsearch_data:/usr/share/elasticsearch/data'
+    labels:
+      - prometheus_job=elasticsearch
+    ports:
+      - '9200:9200'
+  redis:
+    image: 'redis:7.2'
+    container_name: redis
+    networks:
+      - tiktoc_new_net
+    volumes:
+      - 'redis_data:/data'
+    command:
+      - redis-server
+      - '--appendonly'
+      - 'yes'
+    labels:
+      - prometheus_job=redis
+    ports:
+      - '6379:6379'
+  redis-exporter:
+    image: 'oliver006/redis_exporter:latest'
+    container_name: redis-exporter
+    environment:
+      REDIS_ADDR: 'redis:6379'
+    networks:
+      - tiktoc_new_net
+    ports:
+      - '9121:9121'
+    labels:
+      - prometheus_job=redis-exporter
+  redpanda:
+    image: 'vectorized/redpanda:latest'
+    container_name: redpanda
+    networks:
+      - tiktoc_new_net
+    command:
+      - redpanda
+      - start
+      - '--smp 1'
+      - '--memory 512M'
+      - '--reserve-memory 0M'
+      - '--overprovisioned'
+      - '--advertise-kafka-addr=localhost:9092'
+    volumes:
+      - 'redpanda_data:/var/lib/redpanda/data'
+    labels:
+      - prometheus_job=redpanda
+    ports:
+      - '9092:9092'
+      - '9644:9644'
+  prometheus:
+    image: 'prom/prometheus:latest'
+    container_name: prometheus
+    user: root
+    networks:
+      - tiktoc_new_net
+    volumes:
+      - 'prometheus_data:/prometheus'
+      - 'prometheus_config:/etc/prometheus'
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    cap_add:
+      - NET_RAW
+    ports:
+      - '9090:9090'
+    labels:
+      - prometheus_job=prometheus
+  prometheus-config-setup:
+    image: 'alpine:latest'
+    container_name: prometheus-config-setup
+    networks:
+      - tiktoc_new_net
+    volumes:
+      - 'prometheus_config:/etc/prometheus'
+    command: |
+      sh -c "echo 'global:
+        scrape_interval: 15s
+      scrape_configs:
+        - job_name: \"postgres\"
+          static_configs:
+            - targets: [\"postgres-exporter:9187\"]
+        - job_name: \"elasticsearch\"
+          static_configs:
+            - targets: [\"elasticsearch:9200\"]
+        - job_name: \"redis\"
+          static_configs:
+            - targets: [\"redis-exporter:9121\"]
+        - job_name: \"redpanda\"
+          static_configs:
+            - targets: [\"redpanda:9644\"]
+        - job_name: \"prometheus\"
+          static_configs:
+            - targets: [\"prometheus:9090\"]
+      ' > /etc/prometheus/prometheus.yml && echo 'Prometheus configuration file created.'"
+    labels:
+      - prometheus_job=prometheus-config-setup
+    restart: 'no'
+networks:
+  tiktoc_new_net:
+    name: tiktoc_new_net
+    external: true
+volumes:
+  elasticsearch_data: null
+  redis_data: null
+  postgres_data: null
+  redpanda_data: null
+  prometheus_data: null
+  prometheus_config: null
